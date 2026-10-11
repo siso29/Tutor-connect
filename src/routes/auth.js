@@ -1,4 +1,3 @@
-
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -15,7 +14,7 @@ router.get('/test', (req, res) => {
 // Register a student or tutor
 router.post('/register', async (req, res) => {
   try {
-    const { fullName, email, password, role } = req.body;
+    const { fullName, email, password, role, bio, qualifications, subjects, hourlyRate, location, gradeLevels } = req.body;
 
     if (!fullName || !email || !password || !role) {
       return res.status(400).json({
@@ -67,8 +66,17 @@ router.post('/register', async (req, res) => {
 
       if (role === 'tutor') {
         await client.query(
-          'INSERT INTO tutor_profiles (user_id) VALUES ($1)',
-          [user.id]
+          `INSERT INTO tutor_profiles (user_id, bio, qualifications, subjects, hourly_rate, location, grade_levels)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            user.id,
+            bio || null,
+            qualifications || null,
+            Array.isArray(subjects) ? subjects : [],
+            hourlyRate !== undefined ? Number(hourlyRate) : 0,
+            location || null,
+            Array.isArray(gradeLevels) ? gradeLevels : []
+          ]
         );
       }
 
@@ -80,10 +88,11 @@ router.post('/register', async (req, res) => {
       client.release();
     }
 
+    const secret = process.env.JWT_SECRET || 'default_jwt_secret_change_in_production';
     const token = jwt.sign(
       { sub: String(user.id), role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '2h' }
+      secret,
+      { expiresIn: '7d' }
     );
 
     return res.status(201).json({
@@ -101,7 +110,7 @@ router.post('/register', async (req, res) => {
     }
 
     return res.status(500).json({
-      error: 'Registration failed. Check the server terminal.'
+      error: 'Registration failed. ' + error.message
     });
   }
 });
@@ -148,10 +157,11 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    const secret = process.env.JWT_SECRET || 'default_jwt_secret_change_in_production';
     const token = jwt.sign(
       { sub: String(user.id), role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: '2h' }
+      secret,
+      { expiresIn: '7d' }
     );
 
     return res.json({
@@ -167,14 +177,78 @@ router.post('/login', async (req, res) => {
   } catch (error) {
     console.error('Login error:', error.message);
     return res.status(500).json({
-      error: 'Login failed. Check the server terminal.'
+      error: 'Login failed: ' + error.message
     });
   }
 });
 
 // Get the logged-in user's profile
 router.get('/me', authenticate, async (req, res) => {
-  res.json({ user: req.user });
+  try {
+    let profileData = null;
+
+    if (req.user.role === 'tutor') {
+      const profileRes = await pool.query(
+        `SELECT bio, qualifications, subjects, grade_levels, hourly_rate, location, updated_at
+         FROM tutor_profiles
+         WHERE user_id = $1`,
+        [req.user.id]
+      );
+      profileData = profileRes.rows[0] || null;
+    }
+
+    res.json({
+      user: {
+        id: req.user.id,
+        full_name: req.user.full_name,
+        email: req.user.email,
+        role: req.user.role,
+        is_active: req.user.is_active,
+        created_at: req.user.created_at,
+        profile: profileData
+      }
+    });
+  } catch (error) {
+    console.error('Fetch me error:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve profile.' });
+  }
+});
+
+// Change Password
+router.put('/change-password', authenticate, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        error: 'Current password and new password are required.'
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        error: 'New password must have at least 8 characters.'
+      });
+    }
+
+    const userRes = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    const valid = await bcrypt.compare(currentPassword, userRes.rows[0].password_hash);
+    if (!valid) {
+      return res.status(400).json({ error: 'Current password does not match.' });
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [newHash, req.user.id]);
+
+    return res.json({ message: 'Password updated successfully.' });
+  } catch (error) {
+    console.error('Change password error:', error.message);
+    res.status(500).json({ error: 'Failed to update password.' });
+  }
 });
 
 module.exports = router;
