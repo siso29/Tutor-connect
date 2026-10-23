@@ -94,3 +94,58 @@ CREATE INDEX IF NOT EXISTS idx_bookings_student_id ON bookings(student_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_tutor_id ON bookings(tutor_id);
 CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
 CREATE INDEX IF NOT EXISTS idx_reviews_tutor_id ON reviews(tutor_id);
+
+-- Add payment status to existing bookings
+ALTER TABLE bookings
+ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';
+
+-- Store payment transactions
+CREATE TABLE IF NOT EXISTS payments (
+    id SERIAL PRIMARY KEY,
+    booking_id INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    student_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    tutor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    merchant_reference VARCHAR(255) NOT NULL UNIQUE,
+    amount NUMERIC(12,2) NOT NULL,
+    currency VARCHAR(10) DEFAULT 'ETB',
+    platform_commission NUMERIC(12,2) DEFAULT 0,
+    tutor_earnings NUMERIC(12,2) DEFAULT 0,
+    status VARCHAR(50) DEFAULT 'pending',
+    chapa_reference VARCHAR(255),
+    payment_method VARCHAR(100),
+    provider_payload JSONB,
+    verified_at TIMESTAMP,
+    checkout_url TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Store webhook events to prevent duplicate processing
+CREATE TABLE IF NOT EXISTS payment_webhook_events (
+    id SERIAL PRIMARY KEY,
+    event_key VARCHAR(255) NOT NULL UNIQUE,
+    event_type VARCHAR(100),
+    payload JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Store user notifications
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    message TEXT NOT NULL,
+    type VARCHAR(100),
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+-- Store user notifications
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    type VARCHAR(100),
+    title VARCHAR(255) NOT NULL,
+    body TEXT NOT NULL,
+    link TEXT,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
