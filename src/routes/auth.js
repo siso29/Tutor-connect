@@ -6,25 +6,49 @@ const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
+function formatUser(row) {
+  if (!row) return null;
+  const name = row.full_name || row.name || '';
+  const avatar = row.avatar || (name ? name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'TC');
+  return {
+    id: row.id,
+    name,
+    fullName: name,
+    full_name: name,
+    email: row.email,
+    role: row.role,
+    status: row.is_active !== false ? 'Active' : 'Inactive',
+    avatar,
+    phone: row.phone || '',
+    is_active: row.is_active !== false,
+    created_at: row.created_at
+  };
+}
+
 // Test route
 router.get('/test', (req, res) => {
   res.json({ message: 'Authentication routes are working!' });
 });
 
-// Register a student or tutor
+// Register
 router.post('/register', async (req, res) => {
   try {
-    const { fullName, email, password, role, bio, qualifications, subjects, hourlyRate, location, gradeLevels } = req.body;
+    const { fullName, name, email, password, role, bio, qualifications, subjects, hourlyRate, location, gradeLevels } = req.body;
+    const resolvedName = fullName || name;
 
-    if (!fullName || !email || !password || !role) {
+    if (!resolvedName || !email || !password) {
       return res.status(400).json({
-        error: 'Full name, email, password, and role are required.'
+        error: 'Full name, email, and password are required.'
       });
     }
 
-    if (!['student', 'tutor'].includes(role)) {
+    const validRoles = ['student', 'guardian', 'learner', 'tutor', 'admin'];
+    let resolvedRole = (role || 'guardian').toLowerCase();
+    if (resolvedRole === 'learner') resolvedRole = 'guardian';
+
+    if (!validRoles.includes(resolvedRole)) {
       return res.status(400).json({
-        error: 'Role must be student or tutor.'
+        error: `Role must be one of: ${validRoles.join(', ')}`
       });
     }
 
@@ -50,32 +74,42 @@ router.post('/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const client = await pool.connect();
 
-    let user;
+    let userRow;
 
     try {
       await client.query('BEGIN');
 
+      const avatar = resolvedName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'TC';
+
       const result = await client.query(
-        `INSERT INTO users (full_name, email, password_hash, role)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, full_name, email, role, created_at`,
-        [fullName.trim(), normalizedEmail, passwordHash, role]
+        `INSERT INTO users (full_name, email, password_hash, role, avatar)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, full_name, email, role, is_active, avatar, created_at`,
+        [resolvedName.trim(), normalizedEmail, passwordHash, resolvedRole, avatar]
       );
 
-      user = result.rows[0];
+      userRow = result.rows[0];
 
-      if (role === 'tutor') {
+      if (resolvedRole === 'tutor') {
         await client.query(
-          `INSERT INTO tutor_profiles (user_id, bio, qualifications, subjects, hourly_rate, location, grade_levels)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          `INSERT INTO tutor_profiles (
+            user_id, bio, qualifications, subjects, hourly_rate, location, grade_levels,
+            modes, experience, verified, verification_status, description, method
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
           [
-            user.id,
-            bio || null,
-            qualifications || null,
-            Array.isArray(subjects) ? subjects : [],
-            hourlyRate !== undefined ? Number(hourlyRate) : 0,
-            location || null,
-            Array.isArray(gradeLevels) ? gradeLevels : []
+            userRow.id,
+            bio || 'Dedicated educator focused on clear explanations and student achievement.',
+            qualifications || 'Certified Tutor',
+            Array.isArray(subjects) ? subjects : ['General Education'],
+            hourlyRate !== undefined ? Number(hourlyRate) : 250,
+            location || 'Addis Ababa',
+            Array.isArray(gradeLevels) ? gradeLevels : [6, 7, 8, 9, 10],
+            ['Online', 'In-person'],
+            3,
+            true,
+            'Verified',
+            bio || 'Dedicated educator focused on clear explanations and student achievement.',
+            'Step-by-step guidance and practice problems.'
           ]
         );
       }
@@ -90,15 +124,17 @@ router.post('/register', async (req, res) => {
 
     const secret = process.env.JWT_SECRET || 'default_jwt_secret_change_in_production';
     const token = jwt.sign(
-      { sub: String(user.id), role: user.role },
+      { sub: String(userRow.id), role: userRow.role },
       secret,
       { expiresIn: '7d' }
     );
 
+    const formatted = formatUser(userRow);
+
     return res.status(201).json({
       message: 'Registration successful.',
       token,
-      user
+      user: formatted
     });
   } catch (error) {
     console.error('Registration error:', error.message);
@@ -127,7 +163,7 @@ router.post('/login', async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT id, full_name, email, password_hash, role, is_active
+      `SELECT id, full_name, email, password_hash, role, is_active, avatar, phone, created_at
        FROM users WHERE email = $1`,
       [email.trim().toLowerCase()]
     );
@@ -164,15 +200,12 @@ router.post('/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
+    const formatted = formatUser(user);
+
     return res.json({
       message: 'Login successful.',
       token,
-      user: {
-        id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        role: user.role
-      }
+      user: formatted
     });
   } catch (error) {
     console.error('Login error:', error.message);
@@ -182,14 +215,16 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Get the logged-in user's profile
+// Get logged-in user profile
 router.get('/me', authenticate, async (req, res) => {
   try {
     let profileData = null;
 
     if (req.user.role === 'tutor') {
       const profileRes = await pool.query(
-        `SELECT bio, qualifications, subjects, grade_levels, hourly_rate, location, updated_at
+        `SELECT bio, qualifications, subjects, grade_levels, hourly_rate, location,
+                modes, experience, availability, available_days, available_times,
+                verified, verification_status, description, method, updated_at
          FROM tutor_profiles
          WHERE user_id = $1`,
         [req.user.id]
@@ -197,14 +232,11 @@ router.get('/me', authenticate, async (req, res) => {
       profileData = profileRes.rows[0] || null;
     }
 
+    const formatted = formatUser(req.user);
+
     res.json({
       user: {
-        id: req.user.id,
-        full_name: req.user.full_name,
-        email: req.user.email,
-        role: req.user.role,
-        is_active: req.user.is_active,
-        created_at: req.user.created_at,
+        ...formatted,
         profile: profileData
       }
     });
