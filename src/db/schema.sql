@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(255) NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   role VARCHAR(50) NOT NULL CHECK (role IN ('student', 'guardian', 'learner', 'tutor', 'admin')),
-  avatar VARCHAR(50),
+  avatar TEXT,
   phone VARCHAR(50),
   is_active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP

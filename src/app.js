@@ -2,6 +2,7 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
+const path = require('path');
 const pool = require('./config/db');
 
 dotenv.config();
@@ -60,6 +61,11 @@ app.use(express.json({
 }));
 
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
+  dotfiles: 'deny',
+  fallthrough: false,
+  maxAge: '1d',
+}));
 
 // Route imports
 const authRoutes = require('./routes/auth');

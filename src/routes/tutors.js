@@ -1,9 +1,60 @@
 
 const express = require('express');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const pool = require('../config/db');
 const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
+const tutorImageDirectory = path.join(__dirname, '..', '..', 'uploads', 'tutors');
+const avatarUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, callback) => {
+      fs.mkdir(tutorImageDirectory, { recursive: true }, (error) => callback(error, tutorImageDirectory));
+    },
+    filename: (req, file, callback) => callback(null, `${crypto.randomUUID()}.upload`),
+  }),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0 },
+});
+
+function uploadTutorImage(req, res, next) {
+  avatarUpload.single('image')(req, res, (error) => {
+    if (!error) return next();
+    const tooLarge = error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE';
+    return res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge ? 'Image must be 5 MB or smaller.' : 'Upload one image using the image field.',
+    });
+  });
+}
+
+function requireTutor(req, res, next) {
+  if (req.user.role !== 'tutor') {
+    return res.status(403).json({ error: 'Only tutor accounts can upload a profile image.' });
+  }
+  return next();
+}
+
+async function detectImageType(filePath) {
+  const handle = await fs.promises.open(filePath, 'r');
+  try {
+    const header = Buffer.alloc(12);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead >= 8 && header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+      return { extension: 'png', mimeType: 'image/png' };
+    }
+    if (bytesRead >= 3 && header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) {
+      return { extension: 'jpg', mimeType: 'image/jpeg' };
+    }
+    if (bytesRead >= 12 && header.toString('ascii', 0, 4) === 'RIFF' && header.toString('ascii', 8, 12) === 'WEBP') {
+      return { extension: 'webp', mimeType: 'image/webp' };
+    }
+    return null;
+  } finally {
+    await handle.close();
+  }
+}
 
 /**
  * Safely format a tutor for frontend and backend compatibility.
@@ -93,6 +144,8 @@ function formatTutor(row, reviews = []) {
     id: row.id,
     name,
     initials,
+    avatar: row.avatar || null,
+    imageUrl: row.avatar && String(row.avatar).startsWith('/uploads/') ? row.avatar : null,
     email: row.email,
     subjects: Array.isArray(row.subjects) ? row.subjects : [],
     grades,
@@ -132,6 +185,53 @@ function formatTutor(row, reviews = []) {
     updated_at: row.updated_at,
   };
 }
+
+router.post('/me/avatar', authenticate, requireTutor, uploadTutorImage, async (req, res, next) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose an image file to upload.' });
+
+  let savedPath;
+  try {
+    const imageType = await detectImageType(req.file.path);
+    if (!imageType) {
+      await fs.promises.unlink(req.file.path);
+      return res.status(415).json({ error: 'Upload a JPEG, PNG, or WebP image.' });
+    }
+
+    const existingUser = await pool.query(
+      'SELECT avatar FROM users WHERE id=$1 AND role=$2 AND is_active=TRUE',
+      [req.user.id, 'tutor'],
+    );
+    if (!existingUser.rows.length) {
+      await fs.promises.unlink(req.file.path);
+      return res.status(404).json({ error: 'Tutor account not found or inactive.' });
+    }
+
+    const filename = `${req.user.id}-${crypto.randomUUID()}.${imageType.extension}`;
+    savedPath = path.join(tutorImageDirectory, filename);
+    await fs.promises.rename(req.file.path, savedPath);
+
+    const imageUrl = `/uploads/tutors/${filename}`;
+    try {
+      await pool.query('UPDATE users SET avatar=$1 WHERE id=$2', [imageUrl, req.user.id]);
+    } catch (error) {
+      await fs.promises.unlink(savedPath).catch(() => {});
+      throw error;
+    }
+
+    const oldAvatar = existingUser.rows[0].avatar;
+    if (oldAvatar && oldAvatar.startsWith('/uploads/tutors/')) {
+      const oldPath = path.resolve(tutorImageDirectory, path.basename(oldAvatar));
+      if (path.dirname(oldPath) === path.resolve(tutorImageDirectory) && oldPath !== savedPath) {
+        await fs.promises.unlink(oldPath).catch(() => {});
+      }
+    }
+
+    return res.json({ message: 'Profile image uploaded successfully.', avatar: imageUrl, imageUrl, mimeType: imageType.mimeType });
+  } catch (error) {
+    if (!savedPath && req.file) await fs.promises.unlink(req.file.path).catch(() => {});
+    return next(error);
+  }
+});
 
 /**
  * Only allow users to update their own tutor profile,
@@ -289,6 +389,7 @@ router.get('/', async (req, res, next) => {
         u.id,
         u.full_name,
         u.email,
+        u.avatar,
         u.created_at,
         tp.bio,
         tp.qualifications,
@@ -392,6 +493,7 @@ router.get('/:id', async (req, res, next) => {
          u.id,
          u.full_name,
          u.email,
+         u.avatar,
          u.created_at,
          tp.bio,
          tp.qualifications,
@@ -612,7 +714,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
 
     const refreshed = await client.query(
       `SELECT
-         u.id, u.full_name, u.email,
+         u.id, u.full_name, u.email, u.avatar,
          tp.*,
          COALESCE(ROUND(AVG(r.rating)::numeric, 1), 0) AS avg_rating,
          COUNT(DISTINCT r.id)::integer AS review_count

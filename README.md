@@ -193,3 +193,10 @@ Requires `Authorization: Bearer <admin_token>`
 ## Payments
 
 `GET /api/payments/methods` requires authentication and returns the payment options available through Chapa hosted checkout, the currency, and whether Chapa is configured. Chapa determines which methods are enabled for a merchant and transaction.
+
+## Tutor profile images
+
+- `POST /api/tutors/me/avatar` accepts an authenticated tutor's multipart upload in the `image` field. JPEG, PNG, and WebP files up to 5 MB are supported.
+- The response includes `imageUrl`; tutor list/detail responses and `/api/auth/me` include the saved avatar path. Images are served from `/uploads`.
+- On an existing database, run `psql "$env:DATABASE_URL" -f .\src\db\avatar_migration.sql` once to expand the avatar column.
+- Keep the `uploads/` directory on persistent storage in deployments.
