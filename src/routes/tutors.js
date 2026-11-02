@@ -261,16 +261,20 @@ router.get('/', async (req, res, next) => {
       maxRate,
       gradeLevel,
       location,
+      mode,
+      lowBandwidth,
       sortBy = 'rating_desc',
       page = 1,
       limit = 50,
       format,
     } = req.query;
 
+    const lowBandwidthEnabled = ['1', 'true', 'yes'].includes(String(lowBandwidth || '').toLowerCase());
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const requestedLimit = Math.max(1, parseInt(limit, 10) || (lowBandwidthEnabled ? 10 : 50));
     const limitNum = Math.max(
       1,
-      Math.min(100, parseInt(limit, 10) || 50)
+      Math.min(lowBandwidthEnabled ? 20 : 100, requestedLimit)
     );
     const offset = (pageNum - 1) * limitNum;
 
@@ -349,11 +353,29 @@ router.get('/', async (req, res, next) => {
       paramIndex++;
     }
 
-    if (gradeLevel !== undefined && gradeLevel !== '') {
-      const grade = parseInt(gradeLevel, 10);
+    if (mode) {
+      const normalizedMode = String(mode).trim().toLowerCase().replace(/_/g, '-');
+      let acceptedModes;
+      if (normalizedMode === 'online') {
+        acceptedModes = ['online'];
+      } else if (['face-to-face', 'in-person', 'inperson'].includes(normalizedMode)) {
+        acceptedModes = ['in-person', 'in person', 'face-to-face', 'face to face'];
+      } else {
+        return res.status(400).json({ error: 'mode must be online or face-to-face.' });
+      }
+      conditions.push(`EXISTS (
+        SELECT 1 FROM unnest(COALESCE(tp.modes, ARRAY[]::text[])) AS modes(mode_name)
+        WHERE LOWER(TRIM(mode_name)) = ANY($${paramIndex}::text[])
+      )`);
+      values.push(acceptedModes);
+      paramIndex++;
+    }
 
-      if (!Number.isInteger(grade) || grade < 1) {
-        return res.status(400).json({ error: 'Invalid grade level.' });
+    if (gradeLevel !== undefined && gradeLevel !== '') {
+      const grade = Number(gradeLevel);
+
+      if (!Number.isInteger(grade) || grade < 0 || grade > 12) {
+        return res.status(400).json({ error: 'gradeLevel must be an integer from 0 through 12.' });
       }
 
       conditions.push(`$${paramIndex} = ANY(tp.grade_levels)`);
@@ -427,7 +449,7 @@ router.get('/', async (req, res, next) => {
     const tutorIds = dataResult.rows.map((row) => row.id);
     let reviewsByTutor = {};
 
-    if (tutorIds.length > 0) {
+    if (!lowBandwidthEnabled && tutorIds.length > 0) {
       const reviewsResult = await pool.query(
         `SELECT
            r.id,
@@ -457,10 +479,17 @@ router.get('/', async (req, res, next) => {
     const tutors = dataResult.rows.map((row) =>
       formatTutor(row, reviewsByTutor[row.id] || [])
     );
+    const responseTutors = lowBandwidthEnabled
+      ? tutors.map(({ description, about, bio, method, qualifications, reviews, avatar, imageUrl, ...compactTutor }) => ({
+          ...compactTutor,
+          avatar: null,
+          imageUrl: null,
+        }))
+      : tutors;
 
     if (format === 'paginated') {
       return res.json({
-        tutors,
+        tutors: responseTutors,
         pagination: {
           total,
           page: pageNum,
@@ -470,9 +499,31 @@ router.get('/', async (req, res, next) => {
       });
     }
 
-    return res.json(tutors);
+    return res.json(responseTutors);
   } catch (error) {
     next(error);
+  }
+});
+
+router.get('/locations', async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT TRIM(tp.location) AS location, COUNT(DISTINCT u.id)::integer AS tutor_count
+       FROM users u
+       JOIN tutor_profiles tp ON tp.user_id = u.id
+       WHERE u.role = 'tutor' AND u.is_active = TRUE
+         AND tp.location IS NOT NULL AND TRIM(tp.location) <> ''
+       GROUP BY TRIM(tp.location)
+       ORDER BY LOWER(TRIM(tp.location)) ASC`
+    );
+    const direDawa = result.rows.find((row) => row.location.toLowerCase().includes('dire dawa')) || {
+      location: 'Dire Dawa',
+      tutor_count: 0
+    };
+    const otherLocations = result.rows.filter((row) => !row.location.toLowerCase().includes('dire dawa'));
+    return res.json({ featured: [direDawa], locations: [direDawa, ...otherLocations] });
+  } catch (error) {
+    return next(error);
   }
 });
 

@@ -77,6 +77,7 @@ const supportRoutes = require('./routes/support');
 const paymentRoutes = require('./routes/payments');
 const messagingRoutes = require('./routes/messaging');
 const notificationRoutes = require('./routes/notifications');
+const configRoutes = require('./routes/config');
 
 // Landing page
 app.get('/', (req, res) => {
@@ -95,7 +96,8 @@ app.get('/', (req, res) => {
       reports: '/api/reports',
       payments: '/api/payments',
       messages: '/api/messages',
-      notifications: '/api/notifications'
+      notifications: '/api/notifications',
+      config: '/api/config'
     }
   });
 });
@@ -133,6 +135,7 @@ app.use('/api/support', supportRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/messages', messagingRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/config', configRoutes);
 
 // Reuse support.js for inquiries
 app.use('/api/inquiries', (req, res, next) => {

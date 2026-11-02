@@ -200,3 +200,10 @@ Requires `Authorization: Bearer <admin_token>`
 - The response includes `imageUrl`; tutor list/detail responses and `/api/auth/me` include the saved avatar path. Images are served from `/uploads`.
 - On an existing database, run `psql "$env:DATABASE_URL" -f .\src\db\avatar_migration.sql` once to expand the avatar column.
 - Keep the `uploads/` directory on persistent storage in deployments.
+
+## Ethiopia-focused API support
+
+- `GET /api/config` returns English and Amharic interface labels, supported grades 0–12, ETB display metadata, featured locations, and marks Afaan Oromo (`om`) as planned. Select a language with `?lang=am` or `Accept-Language: am`.
+- `GET /api/tutors/locations` lists active tutor locations and highlights Dire Dawa.
+- Filter tutor listings with `GET /api/tutors?location=Dire%20Dawa&mode=online` or `mode=face-to-face`; `gradeLevel` accepts 0 through 12.
+- Add `lowBandwidth=true` to tutor listings for a compact response without review details; the page size defaults to 10 and is capped at 20.
