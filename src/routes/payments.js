@@ -7,6 +7,17 @@ const router = express.Router();
 const CHAPA_BASE_URL = 'https://api.chapa.global/v2';
 const COMMISSION_RATE = Math.min(30, Math.max(0, Number(process.env.PLATFORM_COMMISSION_PERCENT || 10)));
 
+// Chapa displays and processes available options on its hosted checkout.
+// The merchant account and transaction determine which ones are enabled.
+const CHAPA_PAYMENT_METHODS = [
+  { id: 'telebirr', name: 'Telebirr', type: 'mobile_money' },
+  { id: 'cbe_birr', name: 'CBE Birr', type: 'mobile_money' },
+  { id: 'mpesa', name: 'M-Pesa', type: 'mobile_money' },
+  { id: 'amole', name: 'Amole', type: 'mobile_money' },
+  { id: 'card', name: 'Credit or debit card', type: 'card' },
+  { id: 'bank_transfer', name: 'Bank transfer', type: 'bank_transfer' }
+];
+
 function safeName(fullName = '') {
   const parts = String(fullName).trim().split(/\s+/).filter(Boolean);
   return { first_name: parts[0] || 'TutorConnect', last_name: parts.slice(1).join(' ') || 'Customer' };
@@ -44,6 +55,18 @@ function statusFromProvider(status) {
   if (value.includes('refund')) return 'refunded';
   return 'pending';
 }
+
+// Lists hosted-checkout options for the frontend. Chapa remains authoritative
+// for the methods enabled for this merchant.
+router.get('/methods', authenticate, (req, res) => {
+  res.json({
+    provider: 'chapa',
+    configured: Boolean(process.env.CHAPA_SECRET_KEY),
+    currency: 'ETB',
+    selection: 'hosted_checkout',
+    methods: CHAPA_PAYMENT_METHODS
+  });
+});
 
 async function markPaymentResult(client, payment, providerData) {
   const newStatus = statusFromProvider(providerData.status);

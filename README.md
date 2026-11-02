@@ -189,3 +189,7 @@ Requires `Authorization: Bearer <admin_token>`
 | `GET` | `/api/admin/users` | List/filter/search all platform users |
 | `PATCH`| `/api/admin/users/:id/status` | Toggle user `isActive` status (activate/suspend) |
 | `GET` | `/api/admin/bookings` | Full audit log of all bookings across the platform |
+
+## Payments
+
+`GET /api/payments/methods` requires authentication and returns the payment options available through Chapa hosted checkout, the currency, and whether Chapa is configured. Chapa determines which methods are enabled for a merchant and transaction.
